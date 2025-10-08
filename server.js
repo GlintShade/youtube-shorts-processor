@@ -2,6 +2,7 @@ const express = require('express');
 const { exec } = require('child_process');
 const util = require('util');
 const fs = require('fs').promises;
+const path = require('path');
 
 const execPromise = util.promisify(exec);
 const app = express();
@@ -12,7 +13,25 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'youtube-shorts-processor' });
 });
 
-// Download and process specific segment using mweb client (recommended by yt-dlp)
+// Initialize cookies file from environment variable
+async function setupCookies() {
+  const cookiesContent = process.env.YT_COOKIES;
+  
+  if (cookiesContent) {
+    const cookiesPath = '/tmp/cookies.txt';
+    await fs.writeFile(cookiesPath, cookiesContent, 'utf8');
+    console.log('Cookies file created from environment variable');
+    return cookiesPath;
+  }
+  
+  console.log('No cookies provided - downloads may fail for some videos');
+  return null;
+}
+
+let cookiesPath = null;
+setupCookies().then(path => { cookiesPath = path; });
+
+// Download and process specific segment
 app.post('/process-segment', async (req, res) => {
   const { videoUrl, startTime, duration = 60, caption, cta } = req.body;
   
@@ -30,17 +49,23 @@ app.post('/process-segment', async (req, res) => {
     // Calculate end time
     const endTime = startTime + duration;
     
-    // Use mweb client (mobile web) - recommended by yt-dlp for bypassing restrictions
-    // This works without cookies or authentication
-    const ytDlpCommand = `yt-dlp \
+    // Build yt-dlp command with cookies if available
+    let ytDlpCommand = `yt-dlp \
       --extractor-args "youtube:player_client=mweb" \
-      -f "best[ext=mp4][height<=1080]/best[height<=1080]/best" \
+      -f "best[ext=mp4][height<=1080]/best[height<=1080]/best"`;
+    
+    // Add cookies if available
+    if (cookiesPath) {
+      ytDlpCommand += ` --cookies "${cookiesPath}"`;
+    }
+    
+    ytDlpCommand += ` \
       --force-keyframes-at-cuts \
       --download-sections "*${startTime}-${endTime}" \
       -o "${downloadPath}" \
       "${videoUrl}"`;
 
-    console.log('Downloading with mweb client...');
+    console.log('Downloading video...');
     const { stdout, stderr } = await execPromise(ytDlpCommand, { 
       maxBuffer: 50 * 1024 * 1024,
       timeout: 300000 // 5 minute timeout
@@ -106,4 +131,5 @@ app.post('/process-segment', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`YouTube Shorts Processor running on port ${PORT}`);
+  console.log(`Cookies ${cookiesPath ? 'loaded' : 'not provided'}`);
 });
