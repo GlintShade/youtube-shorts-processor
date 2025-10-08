@@ -40,47 +40,44 @@ app.post('/process-segment', async (req, res) => {
   }
 
   const fileName = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  const downloadPath = `/tmp/${fileName}.mp4`;
+  const rawDownloadPath = `/tmp/${fileName}_raw.mp4`;
+  const cutPath = `/tmp/${fileName}_cut.mp4`;
   const outputPath = `/tmp/${fileName}_processed.mp4`;
 
   try {
-    console.log(`Downloading segment: ${startTime}s for ${duration}s duration`);
+    console.log(`Step 1: Downloading video segment starting at ${startTime}s`);
     
-    // Calculate end time
-    const endTime = startTime + duration;
-    
-    // Build yt-dlp command with cookies if available
+    // Download with yt-dlp using FFmpeg to cut during download
     let ytDlpCommand = `yt-dlp \
       --extractor-args "youtube:player_client=mweb" \
       -f "best[ext=mp4][height<=1080]/best[height<=1080]/best"`;
     
-    // Add cookies if available
     if (cookiesPath) {
       ytDlpCommand += ` --cookies "${cookiesPath}"`;
     }
     
+    // Use FFmpeg downloader to cut segment during download (much faster!)
     ytDlpCommand += ` \
-      --force-keyframes-at-cuts \
-      --download-sections "*${startTime}-${endTime}" \
-      -o "${downloadPath}" \
+      --downloader ffmpeg \
+      --downloader-args "ffmpeg_i:-ss ${startTime} -t ${duration}" \
+      -o "${rawDownloadPath}" \
       "${videoUrl}"`;
 
-    console.log('Downloading video...');
+    console.log('Downloading with FFmpeg segment cutting...');
     const { stdout, stderr } = await execPromise(ytDlpCommand, { 
       maxBuffer: 50 * 1024 * 1024,
-      timeout: 300000 // 5 minute timeout
+      timeout: 180000 // 3 minute timeout
     });
     
-    if (stdout) console.log('yt-dlp output:', stdout);
-    if (stderr) console.log('yt-dlp stderr:', stderr);
+    if (stdout) console.log('Download complete');
     
-    console.log('Processing video with FFmpeg...');
+    console.log('Step 2: Adding text overlays...');
     
-    // Prepare text overlays - remove emojis and special chars that cause font issues
+    // Prepare text overlays - remove emojis and special chars
     const cleanText = (text) => {
       return text
-        .replace(/[^\x00-\x7F]/g, '') // Remove non-ASCII (emojis, special chars)
-        .replace(/'/g, "'\\''")       // Escape single quotes
+        .replace(/[^\x00-\x7F]/g, '') // Remove non-ASCII
+        .replace(/'/g, "'\\''")       // Escape quotes
         .trim();
     };
     
@@ -88,8 +85,7 @@ app.post('/process-segment', async (req, res) => {
     const ctaText = cleanText(cta || 'Follow for more!');
     
     // Process video: convert to vertical 9:16 with text overlays
-    // Using fontfile to specify a font that exists in Alpine
-    await execPromise(`ffmpeg -i "${downloadPath}" \
+    await execPromise(`ffmpeg -i "${rawDownloadPath}" \
       -vf "scale=w=1080:h=ih*1080/iw:force_original_aspect_ratio=decrease,\
       pad=w=1080:h=1920:x=(ow-iw)/2:y=(oh-ih)/2:color=black,\
       drawtext=fontfile=/usr/share/fonts/liberation/LiberationSans-Bold.ttf:\
@@ -98,17 +94,21 @@ app.post('/process-segment', async (req, res) => {
       drawtext=fontfile=/usr/share/fonts/liberation/LiberationSans-Bold.ttf:\
       text='${ctaText}':x=(w-text_w)/2:y=h-150:fontsize=42:fontcolor=white:\
       box=1:boxcolor=red@0.8:boxborderw=12" \
-      -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k "${outputPath}" -y`);
+      -c:v libx264 -preset ultrafast -crf 23 -c:a aac -b:a 128k "${outputPath}" -y`, {
+      timeout: 120000 // 2 minute timeout for processing
+    });
     
-    console.log('Reading processed video...');
+    console.log('Step 3: Reading processed video...');
     
     // Read file and return as base64
     const videoBuffer = await fs.readFile(outputPath);
     const base64Video = videoBuffer.toString('base64');
     
     // Cleanup
-    await fs.unlink(downloadPath).catch(() => {});
+    await fs.unlink(rawDownloadPath).catch(() => {});
     await fs.unlink(outputPath).catch(() => {});
+    
+    console.log('Success! Video processed and encoded.');
     
     res.json({
       success: true,
@@ -126,7 +126,8 @@ app.post('/process-segment', async (req, res) => {
     
     // Cleanup on error
     try {
-      await fs.unlink(downloadPath).catch(() => {});
+      await fs.unlink(rawDownloadPath).catch(() => {});
+      await fs.unlink(cutPath).catch(() => {});
       await fs.unlink(outputPath).catch(() => {});
     } catch {}
     
