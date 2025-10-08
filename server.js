@@ -12,7 +12,7 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'youtube-shorts-processor' });
 });
 
-// Download and process specific segment with OAUTH authentication
+// Download and process specific segment using mweb client (recommended by yt-dlp)
 app.post('/process-segment', async (req, res) => {
   const { videoUrl, startTime, duration = 60, caption, cta } = req.body;
   
@@ -30,18 +30,24 @@ app.post('/process-segment', async (req, res) => {
     // Calculate end time
     const endTime = startTime + duration;
     
-    // FIXED: Use oauth2 and android client to bypass 403 errors
+    // Use mweb client (mobile web) - recommended by yt-dlp for bypassing restrictions
+    // This works without cookies or authentication
     const ytDlpCommand = `yt-dlp \
-      --username oauth2 \
-      --password '' \
-      -f "best[ext=mp4][height<=1080]/best[ext=mp4]/best" \
-      --download-sections "*${startTime}-${endTime}" \
+      --extractor-args "youtube:player_client=mweb" \
+      -f "best[ext=mp4][height<=1080]/best[height<=1080]/best" \
       --force-keyframes-at-cuts \
+      --download-sections "*${startTime}-${endTime}" \
       -o "${downloadPath}" \
       "${videoUrl}"`;
 
-    console.log('Executing yt-dlp command...');
-    await execPromise(ytDlpCommand, { maxBuffer: 50 * 1024 * 1024 });
+    console.log('Downloading with mweb client...');
+    const { stdout, stderr } = await execPromise(ytDlpCommand, { 
+      maxBuffer: 50 * 1024 * 1024,
+      timeout: 300000 // 5 minute timeout
+    });
+    
+    if (stdout) console.log('yt-dlp output:', stdout);
+    if (stderr) console.log('yt-dlp stderr:', stderr);
     
     console.log('Processing video with FFmpeg...');
     
@@ -81,7 +87,7 @@ app.post('/process-segment', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error:', error);
+    console.error('Error details:', error);
     
     // Cleanup on error
     try {
@@ -91,7 +97,8 @@ app.post('/process-segment', async (req, res) => {
     
     res.status(500).json({ 
       error: 'Processing failed', 
-      details: error.message 
+      details: error.message,
+      stderr: error.stderr || 'No stderr available'
     });
   }
 });
