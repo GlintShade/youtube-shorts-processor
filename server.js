@@ -128,8 +128,9 @@ app.post('/process-segment', async (req, res) => {
     
     console.log('Success! Video ready for download');
     
-    // Return URL instead of base64
-    const downloadUrl = `${req.protocol}://${req.get('host')}/downloads/${fileName}_processed.mp4`;
+    // Return URL instead of base64 (force HTTPS for Railway)
+    const host = req.get('host');
+    const downloadUrl = `https://${host}/downloads/${fileName}_processed.mp4`;
     
     res.json({
       success: true,
