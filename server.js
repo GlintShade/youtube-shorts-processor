@@ -76,17 +76,27 @@ app.post('/process-segment', async (req, res) => {
     
     console.log('Processing video with FFmpeg...');
     
-    // Prepare text overlays
-    const captionText = (caption || 'Amazing Content!').replace(/'/g, "'\\''");
-    const ctaText = (cta || 'Follow for more!').replace(/'/g, "'\\''");
+    // Prepare text overlays - remove emojis and special chars that cause font issues
+    const cleanText = (text) => {
+      return text
+        .replace(/[^\x00-\x7F]/g, '') // Remove non-ASCII (emojis, special chars)
+        .replace(/'/g, "'\\''")       // Escape single quotes
+        .trim();
+    };
+    
+    const captionText = cleanText(caption || 'Amazing Content!');
+    const ctaText = cleanText(cta || 'Follow for more!');
     
     // Process video: convert to vertical 9:16 with text overlays
+    // Using fontfile to specify a font that exists in Alpine
     await execPromise(`ffmpeg -i "${downloadPath}" \
       -vf "scale=w=1080:h=ih*1080/iw:force_original_aspect_ratio=decrease,\
       pad=w=1080:h=1920:x=(ow-iw)/2:y=(oh-ih)/2:color=black,\
-      drawtext=text='${captionText}':x=(w-text_w)/2:y=80:fontsize=52:fontcolor=white:\
+      drawtext=fontfile=/usr/share/fonts/liberation/LiberationSans-Bold.ttf:\
+      text='${captionText}':x=(w-text_w)/2:y=80:fontsize=52:fontcolor=white:\
       box=1:boxcolor=black@0.7:boxborderw=15,\
-      drawtext=text='${ctaText}':x=(w-text_w)/2:y=h-150:fontsize=42:fontcolor=white:\
+      drawtext=fontfile=/usr/share/fonts/liberation/LiberationSans-Bold.ttf:\
+      text='${ctaText}':x=(w-text_w)/2:y=h-150:fontsize=42:fontcolor=white:\
       box=1:boxcolor=red@0.8:boxborderw=12" \
       -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k "${outputPath}" -y`);
     
